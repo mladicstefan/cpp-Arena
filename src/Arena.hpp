@@ -2,7 +2,7 @@
 
 #include <cstddef>
 #include <stdexcept>
-
+#include <cstdint>
 class MemoryArena {
 private:
     char* const base_ptr;    
@@ -28,16 +28,18 @@ public:
 
 template<typename T>
 T* MemoryArena::allocate() {
+    constexpr size_t alignment = alignof(T);
+    
+    uintptr_t addr = reinterpret_cast<uintptr_t>(current_ptr);
+    uintptr_t aligned_addr = (addr + alignment - 1) & ~(alignment - 1);
 
-    size_t needed = sizeof(T); 
-    if (current_ptr + needed > base_ptr + total_size) {
+    char* aligned_ptr = reinterpret_cast<char*>(aligned_addr);
+    if (aligned_ptr + sizeof(T) > base_ptr + total_size) {
         return nullptr;
     }
     
-    T* result = reinterpret_cast<T*>(current_ptr);
-    current_ptr += needed;  
-    
-    return result;
+    current_ptr = aligned_ptr + sizeof(T);
+    return reinterpret_cast<T*>(aligned_ptr);
 }
 
 template<typename T>
