@@ -104,17 +104,18 @@ void test_deallocate_crash_scenarios() {
     double* double_ptr = arena.allocate<double>();
     assert(int_ptr && double_ptr);
     
-    // Try to deallocate more than allocated (potential underflow)
-    arena.deallocate<double>();
-    arena.deallocate<int>();
+    // Deallocate in LIFO order (proper usage)
+    arena.deallocate<double>(double_ptr);
+    arena.deallocate<int>(int_ptr);
     
-    // This could cause underflow - the implementation should handle gracefully
-    // Note: This might cause current_ptr to go below base_ptr
-    arena.deallocate<int>(); // Over-deallocate
+    // Test edge case: try to deallocate when arena is empty
+    // This should be handled gracefully by the bounds check
+    int* dummy_ptr = nullptr;
+    arena.deallocate<int>(dummy_ptr); // Should not crash
     
-    // Try to allocate after over-deallocation
+    // Try to allocate after deallocation
     int* new_ptr = arena.allocate<int>();
-    // The arena should still function (though behavior may be undefined)
+    assert(new_ptr != nullptr); // Should work fine
     
     std::cout << "✓ Deallocation edge cases tested" << std::endl;
 }
@@ -176,7 +177,11 @@ void test_thread_safety_alloc_dealloc_race() {
     
     auto deallocator_worker = [&]() {
         while (!stop_flag.load()) {
-            arena.deallocate<int>();
+            // Note: This is a simplified test - in real usage you'd track allocated pointers
+            // For test purposes, we'll just reset the arena periodically
+            if (operations.load() % 10 == 0) {
+                arena.reset(); // Reset arena instead of individual deallocations
+            }
             operations++;
             std::this_thread::sleep_for(std::chrono::microseconds(1));
         }
@@ -251,7 +256,7 @@ void test_stress_rapid_operations() {
         }
         
         if (i % 50 == 0) {
-            arena.deallocate<int>(); // Periodic deallocation
+            arena.reset(); // Periodic reset to avoid filling up arena
         }
     }
     
@@ -260,6 +265,214 @@ void test_stress_rapid_operations() {
     
     std::cout << "Completed " << iterations << " operations in " << duration.count() << " μs" << std::endl;
     std::cout << "✓ Stress test completed without crashes" << std::endl;
+}
+
+// Test class to verify constructor/destructor calls
+class TestObject {
+public:
+    static int constructor_count;
+    static int destructor_count;
+    int value;
+    
+    TestObject() : value(42) {
+        constructor_count++;
+        std::cout << "Constructor called, count: " << constructor_count << std::endl;
+    }
+    
+    ~TestObject() {
+        destructor_count++;
+        std::cout << "Destructor called, count: " << destructor_count << std::endl;
+    }
+    
+    static void reset_counters() {
+        constructor_count = 0;
+        destructor_count = 0;
+    }
+};
+
+int TestObject::constructor_count = 0;
+int TestObject::destructor_count = 0;
+
+void test_constructor_calls() {
+    std::cout << "Testing constructor calls with placement new..." << std::endl;
+    
+    TestObject::reset_counters();
+    MemoryArena arena(1024);
+    
+    // Allocate objects and verify constructors are called
+    TestObject* obj1 = arena.allocate<TestObject>();
+    assert(obj1 != nullptr);
+    assert(obj1->value == 42); // Verify constructor ran
+    assert(TestObject::constructor_count == 1);
+    
+    TestObject* obj2 = arena.allocate<TestObject>();
+    assert(obj2 != nullptr);
+    assert(obj2->value == 42);
+    assert(TestObject::constructor_count == 2);
+    
+    // Test with different types
+    int* int_ptr = arena.allocate<int>();
+    assert(int_ptr != nullptr);
+    // Note: int constructor doesn't increment our counter, but should be zero-initialized
+    
+    std::cout << "✓ Constructors called correctly" << std::endl;
+}
+
+void test_destructor_calls() {
+    std::cout << "Testing destructor calls..." << std::endl;
+    
+    TestObject::reset_counters();
+    MemoryArena arena(1024);
+    
+    // Allocate objects
+    TestObject* obj1 = arena.allocate<TestObject>();
+    TestObject* obj2 = arena.allocate<TestObject>();
+    assert(TestObject::constructor_count == 2);
+    assert(TestObject::destructor_count == 0);
+    
+    // Deallocate in LIFO order and verify destructors are called
+    arena.deallocate<TestObject>(obj2);
+    assert(TestObject::destructor_count == 1);
+    
+    arena.deallocate<TestObject>(obj1);
+    assert(TestObject::destructor_count == 2);
+    
+    std::cout << "✓ Destructors called correctly" << std::endl;
+}
+
+void test_array_allocation() {
+    std::cout << "Testing array allocation..." << std::endl;
+    
+    MemoryArena arena(2048);
+    
+    // Test basic array allocation
+    int* int_array = arena.allocate_array<int>(10);
+    assert(int_array != nullptr);
+    
+    // Verify we can write to all elements
+    for (int i = 0; i < 10; ++i) {
+        int_array[i] = i * 2;
+    }
+    
+    // Verify values
+    for (int i = 0; i < 10; ++i) {
+        assert(int_array[i] == i * 2);
+    }
+    
+    // Test larger array
+    double* double_array = arena.allocate_array<double>(50);
+    assert(double_array != nullptr);
+    
+    for (int i = 0; i < 50; ++i) {
+        double_array[i] = i * 3.14;
+    }
+    
+    std::cout << "✓ Array allocation works correctly" << std::endl;
+}
+
+void test_array_constructors() {
+    std::cout << "Testing array constructor calls..." << std::endl;
+    
+    TestObject::reset_counters();
+    MemoryArena arena(2048);
+    
+    // Allocate array of objects
+    const size_t array_size = 5;
+    TestObject* obj_array = arena.allocate_array<TestObject>(array_size);
+    assert(obj_array != nullptr);
+    
+    // Verify all constructors were called
+    assert(TestObject::constructor_count == array_size);
+    
+    // Verify all objects are properly initialized
+    for (size_t i = 0; i < array_size; ++i) {
+        assert(obj_array[i].value == 42);
+    }
+    
+    std::cout << "✓ Array constructors called correctly" << std::endl;
+}
+
+void test_array_bounds_checking() {
+    std::cout << "Testing array bounds checking..." << std::endl;
+    
+    // Create small arena to test overflow
+    MemoryArena small_arena(64);
+    
+    // Try to allocate huge array - should fail
+    int* huge_array = small_arena.allocate_array<int>(1000000);
+    assert(huge_array == nullptr);
+    
+    // Test zero-size array
+    int* zero_array = small_arena.allocate_array<int>(0);
+    assert(zero_array == nullptr);
+    
+    // Test overflow in size calculation
+    size_t huge_count = SIZE_MAX / sizeof(int) + 1;
+    int* overflow_array = small_arena.allocate_array<int>(huge_count);
+    assert(overflow_array == nullptr);
+    
+    // Test normal allocation still works
+    int* normal_array = small_arena.allocate_array<int>(5);
+    assert(normal_array != nullptr);
+    
+    std::cout << "✓ Array bounds checking works correctly" << std::endl;
+}
+
+void test_array_deallocation() {
+    std::cout << "Testing array deallocation..." << std::endl;
+    
+    TestObject::reset_counters();
+    MemoryArena arena(2048);
+    
+    // Allocate array
+    const size_t array_size = 3;
+    TestObject* obj_array = arena.allocate_array<TestObject>(array_size);
+    assert(obj_array != nullptr);
+    assert(TestObject::constructor_count == array_size);
+    assert(TestObject::destructor_count == 0);
+    
+    // Test array deallocation - should call all destructors
+    arena.deallocate_array<TestObject>(obj_array, array_size);
+    assert(TestObject::destructor_count == array_size);
+    
+    // Test deallocation of zero-size array (should be safe)
+    arena.deallocate_array<TestObject>(nullptr, 0);
+    
+    // Verify memory is reclaimed by allocating again
+    TestObject::reset_counters();
+    TestObject* new_obj = arena.allocate<TestObject>();
+    assert(new_obj != nullptr);
+    assert(TestObject::constructor_count == 1);
+    
+    std::cout << "✓ Array deallocation works correctly" << std::endl;
+}
+
+void test_mixed_allocation() {
+    std::cout << "Testing mixed single/array allocation..." << std::endl;
+    
+    TestObject::reset_counters();
+    MemoryArena arena(2048);
+    
+    // Mix single and array allocations
+    TestObject* single1 = arena.allocate<TestObject>();
+    TestObject* array1 = arena.allocate_array<TestObject>(3);
+    TestObject* single2 = arena.allocate<TestObject>();
+    TestObject* array2 = arena.allocate_array<TestObject>(2);
+    
+    assert(single1 && array1 && single2 && array2);
+    assert(TestObject::constructor_count == 1 + 3 + 1 + 2); // 7 total objects
+    
+    // Verify all objects are properly initialized
+    assert(single1->value == 42);
+    assert(single2->value == 42);
+    for (int i = 0; i < 3; ++i) {
+        assert(array1[i].value == 42);
+    }
+    for (int i = 0; i < 2; ++i) {
+        assert(array2[i].value == 42);
+    }
+    
+    std::cout << "✓ Mixed allocation works correctly" << std::endl;
 }
 
 int main() {
@@ -275,6 +488,13 @@ int main() {
         test_thread_safety_alloc_dealloc_race();
         test_memory_corruption_detection();
         test_stress_rapid_operations();
+        test_constructor_calls();
+        test_destructor_calls();
+        test_array_allocation();
+        test_array_constructors();
+        test_array_bounds_checking();
+        test_array_deallocation();
+        test_mixed_allocation();
         
         std::cout << "\n🎉 All advanced tests completed!" << std::endl;
         std::cout << "Note: Some tests intentionally push boundaries and may expose edge cases." << std::endl;

@@ -114,7 +114,7 @@ Header-only library - no compilation needed. Just include `Arena.hpp`.
 g++ -std=c++17 test_arena.cpp -o test && ./test
 
 # For multithreaded testing, link pthread on some systems
-g++ -std=c++17 -pthread test_arena.cpp -o test && ./test
+g++ -std=c++17 -Wall -Wextra -pthread -I src src/test_arena.cpp -o test && ./test
 ```
 
 ## Implementation Details
