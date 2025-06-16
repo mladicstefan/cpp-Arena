@@ -6,7 +6,8 @@
 *.lo
 *.o
 *.obj
-
+test
+test.exe
 # Precompiled Headers
 *.gch
 *.pch
