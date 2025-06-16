@@ -4,6 +4,7 @@ A simple, stack-based memory arena for C++ built for personal use and learning. 
 
 ## Features
 - **Automatic Alignment**: Properly aligns allocations for any type, including custom aligned structs
+- **Array Support**: Allocate arrays with proper constructor/destructor calls
 - **Thread Safe**: All operations are protected by mutexes for concurrent use
 - **Stack-based Deallocation**: LIFO deallocation pattern for efficient memory management
 - **Header-only**: No compilation required, just include the header
@@ -21,12 +22,19 @@ int main() {
     int* my_int = arena.allocate<int>();
     double* my_double = arena.allocate<double>();
     
+    // Allocate arrays
+    int* int_array = arena.allocate_array<int>(10);
+    
     *my_int = 42;
     *my_double = 3.14159;
+    for (int i = 0; i < 10; ++i) {
+        int_array[i] = i;
+    }
     
     // Deallocate in reverse order (LIFO)
-    arena.deallocate<double>();
-    arena.deallocate<int>();
+    arena.deallocate_array<int>(int_array, 10);
+    arena.deallocate<double>(my_double);
+    arena.deallocate<int>(my_int);
     
     // Or reset everything at once
     arena.reset();
@@ -81,11 +89,13 @@ int main() {
 ## API
 ### Core Operations
 ```cpp
-MemoryArena arena(size);          // Create arena with given size
-T* ptr = arena.allocate<T>();     // Allocate space for type T (thread-safe)
-arena.deallocate<T>();            // Deallocate last allocation (thread-safe)
-arena.reset();                    // Reset to empty state (thread-safe)
-size_t space = arena.remaining(); // Get remaining bytes (thread-safe)
+MemoryArena arena(size);               // Create arena with given size
+T* ptr = arena.allocate<T>();          // Allocate space for type T (thread-safe)
+T* arr = arena.allocate_array<T>(n);   // Allocate array of n elements (thread-safe)
+arena.deallocate<T>(ptr);              // Deallocate object (thread-safe)
+arena.deallocate_array<T>(arr, n);     // Deallocate array (thread-safe)
+arena.reset();                         // Reset to empty state (thread-safe)
+size_t space = arena.remaining();      // Get remaining bytes (thread-safe)
 ```
 
 ### Alignment Guarantees
