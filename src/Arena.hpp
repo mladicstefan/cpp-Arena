@@ -22,7 +22,7 @@ public:
     T* allocate();
     
     template<typename T>  
-    void deallocate();
+    void deallocate(T*);
     
     void reset();
     size_t remaining() const;
@@ -68,14 +68,17 @@ T* MemoryArena::allocate()
     }
     
     current_ptr = aligned_ptr + sizeof(T);
-    return reinterpret_cast<T*>(aligned_ptr);
+    //return reinterpret_cast<T*>(aligned_ptr);
+    T* new_object = new(aligned_ptr) T();
+    return new_object;
 }
 
 template<typename T>
-void MemoryArena::deallocate() 
+void MemoryArena::deallocate(T* object) 
 {
     std::lock_guard<std::mutex> lock(arena_mutex);
     if (current_ptr - sizeof(T) >= base_ptr) {
+        object->~T();
         current_ptr -= sizeof(T);
     }  
 }
